@@ -2,6 +2,7 @@
 Telegram бот: Калькулятор + BIN Checker.
 Команды: /start, /calc, /bin, /help
 """
+import asyncio
 import os
 import re
 import sys
@@ -236,7 +237,7 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
 
 
-def main() -> None:
+async def _run_bot() -> None:
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError("Задайте TELEGRAM_BOT_TOKEN.")
@@ -247,8 +248,26 @@ def main() -> None:
     app.add_handler(CommandHandler("bin", bin_command))
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^calc_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
-    print("Бот запущен.")
-    app.run_polling(drop_pending_updates=True)
+
+    async with app:
+        await app.start()
+        await app.updater.start_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES,
+        )
+        print("Бот запущен.")
+        try:
+            while True:
+                await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await app.updater.stop()
+            await app.stop()
+
+
+def main() -> None:
+    asyncio.run(_run_bot())
 
 
 if __name__ == "__main__":
