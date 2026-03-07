@@ -31,7 +31,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("🔢 Калькулятор"), KeyboardButton("❓ Помощь")],
     ],
     resize_keyboard=True,
-    persistent=True,
+    is_persistent=True,
 )
 
 # Быстрые курсы (inline)
@@ -781,4 +781,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import sys
+        print(f"Ошибка запуска: {e}", file=sys.stderr)
+        raise
