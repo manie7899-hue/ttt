@@ -264,26 +264,36 @@ CURRENCY_SYMBOLS: Dict[str, str] = {
     "USD": "$", "EUR": "€", "GBP": "£", "PLN": "zł", "UAH": "₴",
     "RUB": "₽", "BYN": "Br", "KZT": "₸", "BAM": "KM",
 }
-# Обратный маппинг: символ -> код валюты (для распознавания "500 $", "100 €" и т.д.)
+# Обратный маппинг: символ/название -> код валюты
 SYMBOL_TO_CODE: Dict[str, str] = {
     "$": "USD", "€": "EUR", "£": "GBP", "₴": "UAH", "₽": "RUB",
     "₸": "KZT", "zł": "PLN", "zl": "PLN", "Br": "BYN", "KM": "BAM",
+    # Русские названия
+    "доллар": "USD", "долларов": "USD", "доллара": "USD", "dollar": "USD", "dollars": "USD",
+    "евро": "EUR", "euro": "EUR", "euros": "EUR",
+    "фунт": "GBP", "фунтов": "GBP", "pound": "GBP", "pounds": "GBP",
+    "рубль": "RUB", "рублей": "RUB", "рубля": "RUB", "ruble": "RUB", "rubles": "RUB",
+    "гривна": "UAH", "гривен": "UAH", "гривны": "UAH", "hryvnia": "UAH",
+    "злотый": "PLN", "злотых": "PLN", "zloty": "PLN",
 }
 
 RATES_TARGETS = ["EUR", "GBP", "PLN", "UAH", "USD"]
 
 
 def _resolve_currency(code_or_symbol: str) -> Optional[str]:
-    """Преобразует символ ($, €) или код (USD, EUR) в код валюты."""
+    """Преобразует символ ($, €), название (доллар) или код (USD) в код валюты."""
     s = code_or_symbol.strip()
     if not s:
         return None
-    # Сначала проверяем символ
+    # Символ или название (без учёта регистра)
+    s_lower = s.lower()
+    if s_lower in SYMBOL_TO_CODE:
+        return SYMBOL_TO_CODE[s_lower]
     if s in SYMBOL_TO_CODE:
         return SYMBOL_TO_CODE[s]
-    # Затем код (уже в RATES или FALLBACK)
+    # Код валюты
     code = s.upper()
-    if code in RATES:
+    if code in RATES or code in FALLBACK_RATES:
         return code
     return None
 
@@ -319,6 +329,8 @@ def _fetch_live_rates() -> None:
                 continue
         if not new_rates:
             raise ValueError("could not parse any rates")
+        # API часто возвращает курсы с базой USD и не включает USD в rates — добавляем
+        new_rates.setdefault("USD", 1.0)
         RATES = new_rates
         ts = data.get("ts")
         if isinstance(ts, str):
