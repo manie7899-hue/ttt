@@ -636,8 +636,7 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     return
                 except ValueError:
                     break
-    if not _is_admin(user_id):
-        await update.message.reply_text(text)
+    # Не отвечаем на сообщения не о валюте — только валюта или /fake
 
 
 def _job_fetch_rates(context) -> None:
