@@ -873,17 +873,22 @@ def _fetch_live_rates_force() -> None:
 
 
 async def _post_init(application) -> None:
-    await asyncio.get_event_loop().run_in_executor(None, _fetch_live_rates)
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, _fetch_live_rates)
+    except Exception as exc:
+        print(f"[warning] Не удалось загрузить курсы при старте: {exc}")
     if application.job_queue:
         application.job_queue.run_repeating(_job_fetch_rates, interval=1800, first=10)
 
 
 def main() -> None:
+    import time
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError("Задайте TELEGRAM_BOT_TOKEN.")
     _load_admins()
     _load_users()
+    time.sleep(2)
     app = ApplicationBuilder().token(token).post_init(_post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
@@ -900,7 +905,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^(rates_|fake_|calc_)"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
     print("Бот запущен.")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
