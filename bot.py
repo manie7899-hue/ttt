@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Set
 
@@ -282,7 +282,8 @@ RATES_TARGETS = ["EUR", "GBP", "PLN", "UAH", "USD"]
 
 def _resolve_currency(code_or_symbol: str) -> Optional[str]:
     """Преобразует символ ($, €), название (доллар) или код (USD) в код валюты."""
-    s = code_or_symbol.strip()
+    # Убираем невидимые символы (zero-width, BOM и т.п.)
+    s = "".join(c for c in code_or_symbol if ord(c) > 32 and c not in "\u200b\u200c\u200d\ufeff").strip()
     if not s:
         return None
     # Символ или название (без учёта регистра)
@@ -337,10 +338,24 @@ def _fetch_live_rates() -> None:
             try:
                 LAST_RATES_UPDATE = datetime.fromisoformat(ts.replace("Z", "+00:00"))
             except ValueError:
-                LAST_RATES_UPDATE = None
+                LAST_RATES_UPDATE = datetime.now(timezone.utc)
+        else:
+            LAST_RATES_UPDATE = datetime.now(timezone.utc)
     except Exception:
         if not RATES:
             RATES = dict(FALLBACK_RATES)
+
+
+def _job_fetch_rates(context) -> None:
+    """Периодическое обновление курсов (вызывается job_queue)."""
+    _fetch_live_rates()
+
+
+async def _post_init(application) -> None:
+    """Запуск при старте: первое обновление курсов и планирование периодических."""
+    _fetch_live_rates()
+    if application.job_queue:
+        application.job_queue.run_repeating(_job_fetch_rates, interval=1800, first=10)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -414,9 +429,10 @@ async def convert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     except ZeroDivisionError:
         await update.message.reply_text("Ошибка: некорректные курсы валют.")
         return
-    time_part = ""
     if LAST_RATES_UPDATE is not None:
-        time_part = " (обновлено " + LAST_RATES_UPDATE.strftime("%d.%m.%Y %H:%M") + " по UTC)"
+        time_part = " (🕐 " + LAST_RATES_UPDATE.strftime("%d.%m.%Y %H:%M") + " UTC)"
+    else:
+        time_part = " (⚠️ оффлайн)"
     await update.message.reply_text(f"{amount:.2f} {from_curr} = {result:.2f} {to_curr}{time_part}")
 
 
@@ -472,7 +488,9 @@ async def _handle_rates(update: Update, amount_text: str, base_code: str) -> Non
         lines.append(f" {_get_display(code, converted)}")
     time_part = ""
     if LAST_RATES_UPDATE is not None:
-        time_part = "\n\nКурсы обновлены " + LAST_RATES_UPDATE.strftime("%d.%m.%Y %H:%M") + " по UTC"
+        time_part = "\n\n🕐 Курсы обновлены " + LAST_RATES_UPDATE.strftime("%d.%m.%Y %H:%M") + " UTC"
+    else:
+        time_part = "\n\n⚠️ Курсы оффлайн (без даты обновления)"
     footer = "\n\nUltra БАТЯ ЕБЕТ МАМАШ ВАШИХ"
     body = "\n".join(lines) + time_part + footer
     await update.message.reply_text(body)
@@ -504,13 +522,27 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     text = update.message.text.strip()
     if text.startswith("/"):
         return
-    parts = text.split()
+    parts = [p.strip() for p in text.split()]
     if len(parts) == 2:
-        amount_text, code_or_symbol = parts
-        base_code = _resolve_currency(code_or_symbol)
+        a, b = parts
+        # Вариант 1: "1 $" — сумма первая, валюта вторая
+        base_code = _resolve_currency(b)
         if base_code:
-            await _handle_rates(update, amount_text, base_code)
-            return
+            try:
+                float(a.replace(",", "."))
+                await _handle_rates(update, a, base_code)
+                return
+            except ValueError:
+                pass
+        # Вариант 2: "$ 1" — валюта первая, сумма вторая
+        base_code = _resolve_currency(a)
+        if base_code:
+            try:
+                float(b.replace(",", "."))
+                await _handle_rates(update, b, base_code)
+                return
+            except ValueError:
+                pass
     if len(parts) == 1:
         # Формат без пробела: "500$", "100€", "50£"
         s = text.strip()
@@ -534,7 +566,7 @@ def main() -> None:
         raise RuntimeError("Задайте переменную окружения TELEGRAM_BOT_TOKEN.")
     _load_admins()
     _load_users()
-    app = ApplicationBuilder().token(token).build()
+    app = ApplicationBuilder().token(token).post_init(_post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("calc", calc_command))
