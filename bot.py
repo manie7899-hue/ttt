@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Set
 
 import requests
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -22,6 +22,31 @@ GOOGLE_FINANCE_URL = "https://www.google.com/finance/quote/USD-{code}"
 API_URL = "https://cdn.moneyconvert.net/api/latest.json"
 API_FALLBACK_URL = "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json"
 RANDOMUSER_URL = "https://randomuser.me/api/?nat={code}&results=1"
+GEMINI_MODEL = "gemini-1.5-flash"
+
+# Кнопки главного меню
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton("💱 Курсы"), KeyboardButton("📋 Фейк данные")],
+        [KeyboardButton("🔢 Калькулятор"), KeyboardButton("❓ Помощь")],
+    ],
+    resize_keyboard=True,
+    persistent=True,
+)
+
+# Быстрые курсы (inline)
+RATES_BUTTONS = InlineKeyboardMarkup([
+    [InlineKeyboardButton("100 $", callback_data="rates_100_USD"), InlineKeyboardButton("500 BAM", callback_data="rates_500_BAM")],
+    [InlineKeyboardButton("1000 ₴", callback_data="rates_1000_UAH"), InlineKeyboardButton("500 €", callback_data="rates_500_EUR")],
+    [InlineKeyboardButton("100 £", callback_data="rates_100_GBP"), InlineKeyboardButton("1000 ₽", callback_data="rates_1000_RUB")],
+])
+
+# Фейк по странам (inline)
+FAKE_BUTTONS = InlineKeyboardMarkup([
+    [InlineKeyboardButton("🇩🇪 Германия", callback_data="fake_DE"), InlineKeyboardButton("🇺🇸 США", callback_data="fake_US")],
+    [InlineKeyboardButton("🇬🇧 UK", callback_data="fake_GB"), InlineKeyboardButton("🇧🇦 Босния", callback_data="fake_BA")],
+    [InlineKeyboardButton("🇫🇷 Франция", callback_data="fake_FR"), InlineKeyboardButton("🇺🇦 Украина", callback_data="fake_UA")],
+])
 
 GOOGLE_CURRENCIES = ["EUR", "GBP", "PLN", "UAH", "BAM", "RUB", "BYN", "KZT", "CHF", "JPY", "TRY", "CNY", "CAD", "AUD"]
 ADMINS_FILE = Path(__file__).resolve().parent / "admins.txt"
@@ -51,6 +76,23 @@ COUNTRY_NAMES: Dict[str, str] = {
     "PH": "Philippines", "SA": "Saudi Arabia", "AE": "UAE", "EG": "Egypt", "NG": "Nigeria",
     "ZA": "South Africa",
 }
+
+
+def _ask_gemini(prompt: str) -> Optional[str]:
+    """Отправляет запрос в Gemini API (бесплатный тариф)."""
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        return None
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        response = model.generate_content(prompt[:8000])
+        if response and response.text:
+            return response.text.strip()
+    except Exception:
+        pass
+    return None
 
 
 def _country_flag(code: str) -> str:
@@ -360,10 +402,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Напиши сумму и валюту (курсы как в Google):\n"
         "• 500 BAM или 500 $\n"
         "• 100 €, 50 £, 1000 ₴\n\n"
-        "Команды: /calc, /convert, /rates, /fake, /help\n"
+        "Или используй кнопки ниже 👇\n"
+        "Или задай любой вопрос — отвечу через Gemini AI\n"
         "Админам: /admin — админ-панель"
     )
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, reply_markup=MAIN_KEYBOARD)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -371,8 +414,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/calc <a> <операция> <b> — калькулятор\n"
         "/convert <сумма> <из> <в> — конвертер\n"
         "/rates <сумма> <валюта> — курсы\n"
-        "/fake <код> — фейковые данные (DE, US, UK, BA и т.д.)\n\n"
-        "Или просто: 500 BAM, 100 $, 50 €, 1000 ₴"
+        "/fake <код> — фейковые данные (DE, US, UK, BA)\n\n"
+        "Или: 500 BAM, 100 $ — и любой вопрос (Gemini AI)"
     )
     await update.message.reply_text(text)
 
@@ -438,22 +481,25 @@ def _get_display(code: str, amount: float) -> str:
     return f"{flag} {_format_amount(amount, 2)} {symbol}" if flag else f"{amount:.2f} {code}"
 
 
-async def _handle_rates(update: Update, context: ContextTypes.DEFAULT_TYPE, amount_text: str, base_code: str) -> None:
+async def _handle_rates(update: Update, context: ContextTypes.DEFAULT_TYPE, amount_text: str, base_code: str, reply_message=None) -> None:
+    msg = reply_message or (update.message if update else None)
+    if not msg:
+        return
     try:
         amount = float(amount_text.replace(",", "."))
     except ValueError:
-        await update.message.reply_text("Ошибка: сумма должна быть числом.")
+        await msg.reply_text("Ошибка: сумма должна быть числом.")
         return
     base_code = base_code.upper()
     _fetch_live_rates()
     if base_code not in RATES:
-        await update.message.reply_text("Неизвестная валюта. Примеры: USD, EUR, RUB, BAM.")
+        await msg.reply_text("Неизвестная валюта. Примеры: USD, EUR, RUB, BAM.")
         return
     base_rate = RATES[base_code]
     try:
         amount_in_usd = amount / base_rate
     except ZeroDivisionError:
-        await update.message.reply_text("Ошибка: некорректные курсы.")
+        await msg.reply_text("Ошибка: некорректные курсы.")
         return
     lines = [f"{_get_display(base_code, amount)} ="]
     for code in RATES_TARGETS:
@@ -468,7 +514,8 @@ async def _handle_rates(update: Update, context: ContextTypes.DEFAULT_TYPE, amou
     time_part = f"\n\n🕐 Курсы{src}, обновлено {LAST_RATES_UPDATE.strftime('%d.%m.%Y %H:%M')} UTC" if LAST_RATES_UPDATE else "\n\n⚠️ Курсы оффлайн"
     footer = "\n\nUltra БАТЯ ЕБЕТ МАМАШ ВАШИХ"
     body = "\n".join(lines) + time_part + footer
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=body)
+    chat_id = msg.chat.id if msg else update.effective_chat.id
+    await context.bot.send_message(chat_id=chat_id, text=body)
 
 
 async def rates_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -527,6 +574,46 @@ async def broadcast_start_callback(update: Update, context: ContextTypes.DEFAULT
     await query.answer()
     context.user_data["awaiting_broadcast"] = True
     await query.edit_message_text("Отправьте текст рассылки.")
+
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработка inline-кнопок: rates_<amount>_<code> и fake_<country>."""
+    query = update.callback_query
+    if not query:
+        return
+    data = (query.data or "").strip()
+    await query.answer()
+    if data.startswith("rates_"):
+        parts = data.split("_")
+        if len(parts) >= 3:
+            amount_text, base_code = parts[1], parts[2]
+            await _handle_rates(update, context, amount_text, base_code, reply_message=query.message)
+    elif data.startswith("fake_"):
+        country = data[5:7] if len(data) >= 7 else data[5:]
+        if not country:
+            await query.message.reply_text("Укажите код страны.")
+            return
+        try:
+            await query.edit_message_text("Загрузка данных...")
+        except Exception:
+            pass
+        loop = asyncio.get_event_loop()
+        try:
+            data_obj = await loop.run_in_executor(None, _fetch_fakexy_data, country)
+        except Exception:
+            data_obj = None
+        if not data_obj:
+            await query.edit_message_text("Не удалось получить данные. Попробуйте DE, US, GB, FR, BA.")
+            return
+        text = (
+            f"👤 Name: {data_obj['name']}\n"
+            f"🏠 Street: {data_obj['street']}\n"
+            f"🌆 City: {data_obj['city']}\n"
+            f"📍 State: {data_obj['state']}\n"
+            f"📮 Postal Code: {data_obj['postcode']}\n"
+            f"{_country_flag(data_obj.get('nat', ''))} Country: {data_obj['country']}"
+        )
+        await query.edit_message_text(text)
 
 
 async def broadcast_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -607,6 +694,19 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     text = update.message.text.strip()
     if text.startswith("/"):
         return
+    # Обработка кнопок главного меню
+    if text == "💱 Курсы":
+        await update.message.reply_text("Выбери сумму и валюту:", reply_markup=RATES_BUTTONS)
+        return
+    if text == "📋 Фейк данные":
+        await update.message.reply_text("Выбери страну:", reply_markup=FAKE_BUTTONS)
+        return
+    if text == "🔢 Калькулятор":
+        await update.message.reply_text("Использование: /calc <a> <операция> <b>\nПример: /calc 2 + 3")
+        return
+    if text == "❓ Помощь":
+        await help_command(update, context)
+        return
     parts = [p.strip() for p in text.split()]
     if len(parts) == 2:
         a, b = parts
@@ -637,7 +737,12 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     return
                 except ValueError:
                     break
-    # Не отвечаем на сообщения не о валюте — только валюта или /fake
+    # Сообщение не о валюте — отправляем в Gemini
+    reply = await asyncio.get_event_loop().run_in_executor(None, _ask_gemini, text)
+    if reply:
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=reply[:4000])
+    elif os.getenv("GEMINI_API_KEY", "").strip():
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="Не удалось получить ответ от AI.")
 
 
 def _job_fetch_rates(context) -> None:
@@ -669,6 +774,7 @@ def main() -> None:
     app.add_handler(CommandHandler("listadmins", listadmins_command))
     app.add_handler(CommandHandler("removeadmin", removeadmin_command))
     app.add_handler(CallbackQueryHandler(broadcast_start_callback, pattern="^broadcast_start$"))
+    app.add_handler(CallbackQueryHandler(button_callback, pattern="^(rates_|fake_)"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
     print("Бот запущен.")
     app.run_polling()
