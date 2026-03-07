@@ -16,6 +16,7 @@ from telegram.ext import (
 
 
 API_URL = "https://cdn.moneyconvert.net/api/latest.json"
+API_FALLBACK_URL = "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json"
 ADMINS_FILE = Path(__file__).resolve().parent / "admins.txt"
 USERS_FILE = Path(__file__).resolve().parent / "users.txt"
 
@@ -315,35 +316,50 @@ def _calculate(a: float, b: float, op: str) -> float:
 
 def _fetch_live_rates() -> None:
     global RATES, LAST_RATES_UPDATE
-    try:
-        response = requests.get(API_URL, timeout=8)
-        response.raise_for_status()
-        data = response.json()
-        api_rates = data.get("rates", {})
-        if not api_rates:
-            raise ValueError("empty rates in API response")
-        new_rates: Dict[str, float] = {}
-        for code, value in api_rates.items():
-            try:
-                new_rates[code] = float(value)
-            except (TypeError, ValueError):
-                continue
-        if not new_rates:
-            raise ValueError("could not parse any rates")
-        # API часто возвращает курсы с базой USD и не включает USD в rates — добавляем
-        new_rates.setdefault("USD", 1.0)
-        RATES = new_rates
-        ts = data.get("ts")
-        if isinstance(ts, str):
-            try:
-                LAST_RATES_UPDATE = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            except ValueError:
+    # Пробуем основной API
+    for url, parse_fn in [
+        (API_URL, lambda d: (d.get("rates", {}), d.get("ts"))),
+        (API_FALLBACK_URL, lambda d: (
+            {k.upper(): float(v) for k, v in (d.get("usd") or {}).items() if isinstance(v, (int, float))},
+            d.get("date"),
+        )),
+    ]:
+        try:
+            response = requests.get(url, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            api_rates, ts_raw = parse_fn(data)
+            if not api_rates:
+                raise ValueError("empty rates")
+            new_rates: Dict[str, float] = {}
+            for code, value in api_rates.items():
+                try:
+                    new_rates[code.upper() if isinstance(code, str) else code] = float(value)
+                except (TypeError, ValueError):
+                    continue
+            if not new_rates:
+                raise ValueError("could not parse any rates")
+            new_rates.setdefault("USD", 1.0)
+            RATES = new_rates
+            if isinstance(ts_raw, str) and "T" in ts_raw:
+                try:
+                    LAST_RATES_UPDATE = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                except ValueError:
+                    LAST_RATES_UPDATE = datetime.now(timezone.utc)
+            elif isinstance(ts_raw, str):
+                try:
+                    LAST_RATES_UPDATE = datetime.strptime(ts_raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                except ValueError:
+                    LAST_RATES_UPDATE = datetime.now(timezone.utc)
+            else:
                 LAST_RATES_UPDATE = datetime.now(timezone.utc)
-        else:
-            LAST_RATES_UPDATE = datetime.now(timezone.utc)
-    except Exception:
-        if not RATES:
-            RATES = dict(FALLBACK_RATES)
+            return
+        except Exception:
+            continue
+    # Оба API недоступны — используем запасные курсы
+    if not RATES:
+        RATES = dict(FALLBACK_RATES)
+    LAST_RATES_UPDATE = datetime.now(timezone.utc)
 
 
 def _job_fetch_rates(context) -> None:
