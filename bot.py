@@ -255,20 +255,17 @@ async def broadcast_message_handler(update: Update, context: ContextTypes.DEFAUL
 
 # ---------- Курсы и калькулятор ----------
 
-# Мини‑справочник по валютам: флаг по коду
+# Флаг и символ валюты для красивого вывода
 CODE_META: Dict[str, str] = {
-    "USD": "🇺🇸",
-    "EUR": "🇪🇺",
-    "GBP": "🇬🇧",
-    "PLN": "🇵🇱",
-    "UAH": "🇺🇦",
-    "RUB": "🇷🇺",
-    "BYN": "🇧🇾",
-    "KZT": "🇰🇿",
-    "BAM": "🇧🇦",
+    "USD": "🇺🇸", "EUR": "🇪🇺", "GBP": "🇬🇧", "PLN": "🇵🇱", "UAH": "🇺🇦",
+    "RUB": "🇷🇺", "BYN": "🇧🇾", "KZT": "🇰🇿", "BAM": "🇧🇦",
+}
+CURRENCY_SYMBOLS: Dict[str, str] = {
+    "USD": "$", "EUR": "€", "GBP": "£", "PLN": "zł", "UAH": "₴",
+    "RUB": "₽", "BYN": "Br", "KZT": "₸", "BAM": "KM",
 }
 
-RATES_TARGETS = ["UAH", "EUR", "USD"]
+RATES_TARGETS = ["EUR", "GBP", "PLN", "UAH", "USD"]
 
 
 def _calculate(a: float, b: float, op: str) -> float:
@@ -399,6 +396,13 @@ def _code_to_label(code: str) -> str:
     return f"{flag} {code}" if flag else code
 
 
+def _get_display(code: str, amount: float) -> str:
+    """Формат: флаг + сумма + символ (например: 🇪🇺 431.45 €)."""
+    flag = CODE_META.get(code, "")
+    symbol = CURRENCY_SYMBOLS.get(code, code)
+    return f"{flag} {_format_amount(amount, 2)} {symbol}" if flag else f"{amount:.2f} {code}"
+
+
 async def _handle_rates(update: Update, amount_text: str, base_code: str) -> None:
     try:
         amount = float(amount_text.replace(",", "."))
@@ -417,8 +421,10 @@ async def _handle_rates(update: Update, amount_text: str, base_code: str) -> Non
         await update.message.reply_text("Ошибка: некорректные курсы валют.")
         return
     lines: list[str] = []
-    lines.append("🔁 Currencies")
-    lines.append("")
+    # Первая строка: базовая валюта (флаг + сумма + символ =)
+    base_display = _get_display(base_code, amount)
+    lines.append(f"{base_display} =")
+    # Целевые валюты с отступом
     for code in RATES_TARGETS:
         if code == base_code:
             continue
@@ -429,8 +435,7 @@ async def _handle_rates(update: Update, amount_text: str, base_code: str) -> Non
             converted = amount_in_usd * target_rate
         except ZeroDivisionError:
             continue
-        label = _code_to_label(code)
-        lines.append(f"{label} {_format_amount(converted, 2)}")
+        lines.append(f" {_get_display(code, converted)}")
     time_part = ""
     if LAST_RATES_UPDATE is not None:
         time_part = "\n\nКурсы обновлены " + LAST_RATES_UPDATE.strftime("%d.%m.%Y %H:%M") + " по UTC"
