@@ -72,17 +72,21 @@ def _calc_keyboard() -> InlineKeyboardMarkup:
 
 
 def _extract_bins(text: str) -> list[str]:
-    """Извлекает BIN-ы из текста (игнорирует пробелы, дефисы). '4165 98' -> ['416598']"""
+    """Извлекает BIN-ы из текста. Пробелы/дефисы игнорируются. 4339 62 -> 433962. 4339 6200 0065 0407 -> 433962, 000650, 040700"""
     digits = "".join(c for c in text if c.isdigit())
-    if len(digits) < 6:
+    if len(digits) < 4:
         return []
     bins = []
     i = 0
     while i < len(digits):
-        chunk = digits[i:i + 6]
-        if len(chunk) == 6:
-            bins.append(chunk)
+        rest = len(digits) - i
+        if rest >= 6:
+            bins.append(digits[i:i + 6])
             i += 6
+        elif rest >= 4:
+            chunk = digits[i:].ljust(6, "0")
+            bins.append(chunk)
+            break
         else:
             break
     return bins[:10]
@@ -194,10 +198,10 @@ async def bin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not bins:
         await update.message.reply_text(
             "💳 <b>BIN Checker</b>\n\n"
-            "Введи 6+ цифр (пробелы игнорируются):\n"
+            "Введи 6+ цифр (пробелы не важны):\n"
             "• /bin 457105\n"
             "• /bin 4165 98\n"
-            "• /bin 4165 9812 3456",
+            "• /bin 4339 6200 0065 0407",
             parse_mode="HTML",
         )
         return
