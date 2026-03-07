@@ -153,7 +153,7 @@ SYMBOL_TO_CODE: Dict[str, str] = {
     "евро": "EUR", "euro": "EUR", "euros": "EUR", "еврики": "EUR",
     "фунт": "GBP", "фунтов": "GBP", "pound": "GBP", "pounds": "GBP", "стерлингов": "GBP",
     "рубль": "RUB", "рублей": "RUB", "рубля": "RUB", "ruble": "RUB", "rubles": "RUB",
-    "гривна": "UAH", "гривен": "UAH", "гривны": "UAH", "hryvnia": "UAH", "гривенка": "UAH",
+    "гривна": "UAH", "гривен": "UAH", "гривны": "UAH", "грн": "UAH", "hryvnia": "UAH", "гривенка": "UAH",
     "злотый": "PLN", "злотых": "PLN", "zloty": "PLN",
     "марка": "BAM", "марок": "BAM", "марки": "BAM",
     "франк": "CHF", "франков": "CHF", "franc": "CHF", "francs": "CHF",
@@ -438,7 +438,7 @@ def _get_display(code: str, amount: float) -> str:
     return f"{flag} {_format_amount(amount, 2)} {symbol}" if flag else f"{amount:.2f} {code}"
 
 
-async def _handle_rates(update: Update, amount_text: str, base_code: str) -> None:
+async def _handle_rates(update: Update, context: ContextTypes.DEFAULT_TYPE, amount_text: str, base_code: str) -> None:
     try:
         amount = float(amount_text.replace(",", "."))
     except ValueError:
@@ -467,7 +467,8 @@ async def _handle_rates(update: Update, amount_text: str, base_code: str) -> Non
     src = " (Google Finance)" if RATES_SOURCE == "google" else ""
     time_part = f"\n\n🕐 Курсы{src}, обновлено {LAST_RATES_UPDATE.strftime('%d.%m.%Y %H:%M')} UTC" if LAST_RATES_UPDATE else "\n\n⚠️ Курсы оффлайн"
     footer = "\n\nUltra БАТЯ ЕБЕТ МАМАШ ВАШИХ"
-    await update.message.reply_text("\n".join(lines) + time_part + footer)
+    body = "\n".join(lines) + time_part + footer
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=body)
 
 
 async def rates_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -479,7 +480,7 @@ async def rates_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not base_code:
         await update.message.reply_text("Неизвестная валюта.")
         return
-    await _handle_rates(update, amount_text, base_code)
+    await _handle_rates(update, context, amount_text, base_code)
 
 
 async def fake_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -613,7 +614,7 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if base_code:
             try:
                 float(a.replace(",", "."))
-                await _handle_rates(update, a, base_code)
+                await _handle_rates(update, context, a, base_code)
                 return
             except ValueError:
                 pass
@@ -621,7 +622,7 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if base_code:
             try:
                 float(b.replace(",", "."))
-                await _handle_rates(update, b, base_code)
+                await _handle_rates(update, context, b, base_code)
                 return
             except ValueError:
                 pass
@@ -632,7 +633,7 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 amount_text = s[:-len(sym)].strip()
                 try:
                     float(amount_text.replace(",", "."))
-                    await _handle_rates(update, amount_text, SYMBOL_TO_CODE[sym])
+                    await _handle_rates(update, context, amount_text, SYMBOL_TO_CODE[sym])
                     return
                 except ValueError:
                     break
