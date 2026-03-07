@@ -26,6 +26,12 @@ GOOGLE_CURRENCIES = ["EUR", "GBP", "PLN", "UAH", "BAM", "RUB", "BYN", "KZT", "CH
 ADMINS_FILE = Path(__file__).resolve().parent / "admins.txt"
 USERS_FILE = Path(__file__).resolve().parent / "users.txt"
 FAKE_COUNTRY_MAP: Dict[str, str] = {"UK": "GB", "RU": "RS"}
+COUNTRY_FLAGS: Dict[str, str] = {
+    "Germany": "🇩🇪", "United States": "🇺🇸", "United Kingdom": "🇬🇧", "France": "🇫🇷",
+    "Ukraine": "🇺🇦", "Poland": "🇵🇱", "Russia": "🇷🇺", "Canada": "🇨🇦", "Australia": "🇦🇺",
+    "Brazil": "🇧🇷", "Spain": "🇪🇸", "Italy": "🇮🇹", "Netherlands": "🇳🇱", "Turkey": "🇹🇷",
+    "India": "🇮🇳", "Japan": "🇯🇵", "China": "🇨🇳", "Mexico": "🇲🇽",
+}
 
 FALLBACK_RATES: Dict[str, float] = {
     "AED": 3.6725, "AFN": 63.43, "ALL": 82.69, "AMD": 377.36, "ANG": 1.797, "AOA": 929.28,
@@ -241,15 +247,15 @@ def _fetch_fakexy_data(country_code: str) -> Optional[Dict[str, Any]]:
         ])).strip()
         loc = res.get("location", {})
         street = loc.get("street", {}) or {}
-        street_str = f"{street.get('number', '')} {street.get('name', '')}".strip()
-        city = loc.get("city", "")
-        addr = f"{street_str}, {city}".strip(", ") or f"{city}"
+        street_str = f"{street.get('number', '')} {street.get('name', '')}".strip() or "—"
+        city = loc.get("city", "—")
         return {
             "name": name or "—",
-            "address": addr or "—",
-            "region": loc.get("state", "—"),
-            "zipcode": str(loc.get("postcode", "—")),
-            "phone": res.get("phone", res.get("cell", "—")),
+            "street": street_str,
+            "city": city,
+            "state": loc.get("state", "—"),
+            "postcode": str(loc.get("postcode", "—")),
+            "country": loc.get("country", "—"),
         }
     except Exception:
         return None
@@ -404,11 +410,12 @@ async def fake_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await msg.edit_text("Не удалось получить данные. Попробуйте DE, US, GB, FR.")
         return
     text = (
-        f"1. ФИО: {data['name']}\n"
-        f"2. 2.1 Адрес: {data['address']}\n"
-        f"   2.2 Штат (регион): {data['region']}\n"
-        f"   2.3 ZIP код: {data['zipcode']}\n"
-        f"   2.4 Номер телефона: {data['phone']}"
+        f"👤 Name: {data['name']}\n"
+        f"🏠 Street: {data['street']}\n"
+        f"🌆 City: {data['city']}\n"
+        f"📍 State: {data['state']}\n"
+        f"📮 Postal Code: {data['postcode']}\n"
+        f"{COUNTRY_FLAGS.get(data['country'], '🌍')} Country: {data['country']}"
     )
     await msg.edit_text(text)
 
