@@ -1,5 +1,6 @@
 import asyncio
 import os
+import random
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,13 +26,41 @@ RANDOMUSER_URL = "https://randomuser.me/api/?nat={code}&results=1"
 GOOGLE_CURRENCIES = ["EUR", "GBP", "PLN", "UAH", "BAM", "RUB", "BYN", "KZT", "CHF", "JPY", "TRY", "CNY", "CAD", "AUD"]
 ADMINS_FILE = Path(__file__).resolve().parent / "admins.txt"
 USERS_FILE = Path(__file__).resolve().parent / "users.txt"
-FAKE_COUNTRY_MAP: Dict[str, str] = {"UK": "GB", "RU": "RS"}
-COUNTRY_FLAGS: Dict[str, str] = {
-    "Germany": "🇩🇪", "United States": "🇺🇸", "United Kingdom": "🇬🇧", "France": "🇫🇷",
-    "Ukraine": "🇺🇦", "Poland": "🇵🇱", "Russia": "🇷🇺", "Canada": "🇨🇦", "Australia": "🇦🇺",
-    "Brazil": "🇧🇷", "Spain": "🇪🇸", "Italy": "🇮🇹", "Netherlands": "🇳🇱", "Turkey": "🇹🇷",
-    "India": "🇮🇳", "Japan": "🇯🇵", "China": "🇨🇳", "Mexico": "🇲🇽",
+FAKE_COUNTRY_MAP: Dict[str, str] = {"UK": "GB", "RU": "RS", "BAM": "BA"}
+
+# randomuser.me поддерживает только эти коды
+RANDOMUSER_SUPPORTED: Set[str] = {"AU", "BR", "CA", "CH", "DE", "DK", "ES", "FI", "FR", "GB", "IE", "IN", "IR", "MX", "NL", "NO", "NZ", "RS", "TR", "UA", "US"}
+
+# Faker: код страны -> локаль (для стран без randomuser)
+FAKER_LOCALES: Dict[str, str] = {
+    "BA": "sl_SI", "BAM": "sl_SI", "HR": "hr_HR", "SI": "sl_SI", "MK": "mk_MK", "ME": "sl_SI",
+    "AL": "sq_AL", "BG": "bg_BG", "RO": "ro_RO", "HU": "hu_HU", "SK": "sk_SK",
+    "CZ": "cs_CZ", "PL": "pl_PL", "AT": "de_AT", "IT": "it_IT", "GR": "el_GR",
+    "PT": "pt_PT", "BE": "nl_BE", "JP": "ja_JP", "KR": "ko_KR", "CN": "zh_CN",
+    "TH": "th_TH", "VN": "vi_VN", "ID": "id_ID", "MY": "ms_MY", "PH": "en_PH",
+    "SA": "ar_SA", "AE": "ar_AE", "EG": "ar_EG", "NG": "en_NG", "ZA": "en_ZA",
 }
+BA_CITIES = ["Sarajevo", "Banja Luka", "Tuzla", "Zenica", "Mostar", "Bihać", "Brčko", "Prijedor", "Doboj", "Cazin"]
+BA_STREETS = ["Marsala Tita", "Zmaja od Bosne", "Kralja Tvrtka", "Obala Kulina bana", "Ferhadija", "Mehmeda Spahe", "Mustafe Hukića", "Ante Starčevića", "Kneza Branimira", "Trg slobode"]
+COUNTRY_NAMES: Dict[str, str] = {
+    "BA": "Bosnia and Herzegovina", "BAM": "Bosnia and Herzegovina", "HR": "Croatia", "SI": "Slovenia", "MK": "North Macedonia",
+    "ME": "Montenegro", "AL": "Albania", "BG": "Bulgaria", "RO": "Romania", "HU": "Hungary",
+    "SK": "Slovakia", "CZ": "Czech Republic", "PL": "Poland", "AT": "Austria", "IT": "Italy",
+    "GR": "Greece", "PT": "Portugal", "BE": "Belgium", "JP": "Japan", "KR": "South Korea",
+    "CN": "China", "TH": "Thailand", "VN": "Vietnam", "ID": "Indonesia", "MY": "Malaysia",
+    "PH": "Philippines", "SA": "Saudi Arabia", "AE": "UAE", "EG": "Egypt", "NG": "Nigeria",
+    "ZA": "South Africa",
+}
+
+
+def _country_flag(code: str) -> str:
+    """Флаг страны из 2-буквенного кода (DE, US, GB и т.д.)."""
+    if not code or len(code) != 2:
+        return "🌍"
+    a, b = code.upper()[0], code.upper()[1]
+    if not ("A" <= a <= "Z" and "A" <= b <= "Z"):
+        return "🌍"
+    return chr(0x1F1E6 + ord(a) - ord("A")) + chr(0x1F1E6 + ord(b) - ord("A"))
 
 FALLBACK_RATES: Dict[str, float] = {
     "AED": 3.6725, "AFN": 63.43, "ALL": 82.69, "AMD": 377.36, "ANG": 1.797, "AOA": 929.28,
@@ -231,14 +260,16 @@ def _fetch_live_rates() -> None:
     LAST_RATES_UPDATE = datetime.now(timezone.utc)
 
 
-def _fetch_fakexy_data(country_code: str) -> Optional[Dict[str, Any]]:
-    code = country_code.upper().strip()[:2]
-    code = FAKE_COUNTRY_MAP.get(code, code)
+def _fetch_fake_data_randomuser(code: str) -> Optional[Dict[str, Any]]:
+    """Данные с randomuser.me (только для поддерживаемых стран)."""
     try:
         r = requests.get(RANDOMUSER_URL.format(code=code.lower()), timeout=10)
         r.raise_for_status()
         data = r.json()
         res = data.get("results", [{}])[0]
+        nat = res.get("nat", "").upper()
+        if nat != code.upper():
+            return None
         name_obj = res.get("name", {})
         name = " ".join(filter(None, [
             name_obj.get("title"),
@@ -248,17 +279,76 @@ def _fetch_fakexy_data(country_code: str) -> Optional[Dict[str, Any]]:
         loc = res.get("location", {})
         street = loc.get("street", {}) or {}
         street_str = f"{street.get('number', '')} {street.get('name', '')}".strip() or "—"
-        city = loc.get("city", "—")
         return {
             "name": name or "—",
             "street": street_str,
-            "city": city,
+            "city": loc.get("city", "—"),
             "state": loc.get("state", "—"),
             "postcode": str(loc.get("postcode", "—")),
             "country": loc.get("country", "—"),
+            "nat": nat,
         }
     except Exception:
         return None
+
+
+def _fetch_fake_data_faker(code: str) -> Optional[Dict[str, Any]]:
+    """Данные через Faker (для BA, HR, PL и др. стран без randomuser)."""
+    try:
+        from faker import Faker
+        locale = FAKER_LOCALES.get(code, "en_US")
+        fake = Faker(locale)
+        country = COUNTRY_NAMES.get(code, getattr(fake, "current_country", lambda: "—")())
+        state = "—"
+        if hasattr(fake, "administrative_unit"):
+            state = fake.administrative_unit()
+        elif hasattr(fake, "state"):
+            state = fake.state()
+        postcode = "—"
+        if hasattr(fake, "postcode"):
+            postcode = fake.postcode()
+        elif hasattr(fake, "zipcode"):
+            postcode = fake.zipcode()
+        return {
+            "name": fake.name(),
+            "street": fake.street_address(),
+            "city": fake.city(),
+            "state": state,
+            "postcode": str(postcode),
+            "country": country,
+            "nat": code,
+        }
+    except Exception:
+        return None
+
+
+def _fetch_fake_data_bosnia() -> Dict[str, Any]:
+    """Данные для Боснии и Герцеговины (BA)."""
+    from faker import Faker
+    fake = Faker()
+    return {
+        "name": fake.name(),
+        "street": f"{random.choice(BA_STREETS)} {random.randint(1, 150)}",
+        "city": random.choice(BA_CITIES),
+        "state": random.choice(["Federacija BiH", "Republika Srpska", "Brčko Distrikt"]),
+        "postcode": str(random.randint(71000, 78000)),
+        "country": "Bosnia and Herzegovina",
+        "nat": "BA",
+    }
+
+
+def _fetch_fakexy_data(country_code: str) -> Optional[Dict[str, Any]]:
+    code = country_code.upper().strip()[:2]
+    code = FAKE_COUNTRY_MAP.get(code, code)
+    if code == "BA":
+        return _fetch_fake_data_bosnia()
+    if code in RANDOMUSER_SUPPORTED:
+        data = _fetch_fake_data_randomuser(code)
+        if data:
+            return data
+    if code in FAKER_LOCALES or code in COUNTRY_NAMES:
+        return _fetch_fake_data_faker(code)
+    return None
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -281,7 +371,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/calc <a> <операция> <b> — калькулятор\n"
         "/convert <сумма> <из> <в> — конвертер\n"
         "/rates <сумма> <валюта> — курсы\n"
-        "/fake <код> — фейковые данные (DE, US, UK и т.д.)\n\n"
+        "/fake <код> — фейковые данные (DE, US, UK, BA и т.д.)\n\n"
         "Или просто: 500 BAM, 100 $, 50 €, 1000 ₴"
     )
     await update.message.reply_text(text)
@@ -407,7 +497,7 @@ async def fake_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except Exception:
         data = None
     if not data:
-        await msg.edit_text("Не удалось получить данные. Попробуйте DE, US, GB, FR.")
+        await msg.edit_text("Не удалось получить данные. Попробуйте DE, US, GB, FR, BA.")
         return
     text = (
         f"👤 Name: {data['name']}\n"
@@ -415,7 +505,7 @@ async def fake_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"🌆 City: {data['city']}\n"
         f"📍 State: {data['state']}\n"
         f"📮 Postal Code: {data['postcode']}\n"
-        f"{COUNTRY_FLAGS.get(data['country'], '🌍')} Country: {data['country']}"
+        f"{_country_flag(data.get('nat', ''))} Country: {data['country']}"
     )
     await msg.edit_text(text)
 
