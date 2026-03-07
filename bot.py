@@ -23,30 +23,94 @@ API_URL = "https://cdn.moneyconvert.net/api/latest.json"
 API_FALLBACK_URL = "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json"
 RANDOMUSER_URL = "https://randomuser.me/api/?nat={code}&results=1"
 GEMINI_MODEL = "gemini-1.5-flash"
+RATES_CACHE_TTL = 300
 
-# Кнопки главного меню
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton("💱 Курсы"), KeyboardButton("📋 Фейк данные")],
-        [KeyboardButton("🔢 Калькулятор"), KeyboardButton("❓ Помощь")],
+        [KeyboardButton("💱 Курсы"), KeyboardButton("🔢 Калькулятор")],
+        [KeyboardButton("📋 Фейк данные"), KeyboardButton("❓ Помощь")],
     ],
     resize_keyboard=True,
     is_persistent=True,
 )
 
-# Быстрые курсы (inline)
 RATES_BUTTONS = InlineKeyboardMarkup([
-    [InlineKeyboardButton("100 $", callback_data="rates_100_USD"), InlineKeyboardButton("500 BAM", callback_data="rates_500_BAM")],
-    [InlineKeyboardButton("1000 ₴", callback_data="rates_1000_UAH"), InlineKeyboardButton("500 €", callback_data="rates_500_EUR")],
-    [InlineKeyboardButton("100 £", callback_data="rates_100_GBP"), InlineKeyboardButton("1000 ₽", callback_data="rates_1000_RUB")],
+    [
+        InlineKeyboardButton("100$", callback_data="rates_100_USD"),
+        InlineKeyboardButton("500$", callback_data="rates_500_USD"),
+        InlineKeyboardButton("1000$", callback_data="rates_1000_USD"),
+    ],
+    [
+        InlineKeyboardButton("100€", callback_data="rates_100_EUR"),
+        InlineKeyboardButton("500€", callback_data="rates_500_EUR"),
+        InlineKeyboardButton("1000€", callback_data="rates_1000_EUR"),
+    ],
+    [
+        InlineKeyboardButton("100 BAM", callback_data="rates_100_BAM"),
+        InlineKeyboardButton("500 BAM", callback_data="rates_500_BAM"),
+        InlineKeyboardButton("1000 BAM", callback_data="rates_1000_BAM"),
+    ],
+    [
+        InlineKeyboardButton("1000₴", callback_data="rates_1000_UAH"),
+        InlineKeyboardButton("1000£", callback_data="rates_1000_GBP"),
+        InlineKeyboardButton("1000₽", callback_data="rates_1000_RUB"),
+    ],
 ])
 
-# Фейк по странам (inline)
 FAKE_BUTTONS = InlineKeyboardMarkup([
     [InlineKeyboardButton("🇩🇪 Германия", callback_data="fake_DE"), InlineKeyboardButton("🇺🇸 США", callback_data="fake_US")],
     [InlineKeyboardButton("🇬🇧 UK", callback_data="fake_GB"), InlineKeyboardButton("🇧🇦 Босния", callback_data="fake_BA")],
     [InlineKeyboardButton("🇫🇷 Франция", callback_data="fake_FR"), InlineKeyboardButton("🇺🇦 Украина", callback_data="fake_UA")],
+    [InlineKeyboardButton("🇵🇱 Польша", callback_data="fake_PL"), InlineKeyboardButton("🇮🇹 Италия", callback_data="fake_IT")],
 ])
+
+
+def _calc_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("7", callback_data="calc_7"),
+            InlineKeyboardButton("8", callback_data="calc_8"),
+            InlineKeyboardButton("9", callback_data="calc_9"),
+            InlineKeyboardButton("÷", callback_data="calc_/"),
+        ],
+        [
+            InlineKeyboardButton("4", callback_data="calc_4"),
+            InlineKeyboardButton("5", callback_data="calc_5"),
+            InlineKeyboardButton("6", callback_data="calc_6"),
+            InlineKeyboardButton("×", callback_data="calc_*"),
+        ],
+        [
+            InlineKeyboardButton("1", callback_data="calc_1"),
+            InlineKeyboardButton("2", callback_data="calc_2"),
+            InlineKeyboardButton("3", callback_data="calc_3"),
+            InlineKeyboardButton("−", callback_data="calc_-"),
+        ],
+        [
+            InlineKeyboardButton("0", callback_data="calc_0"),
+            InlineKeyboardButton(".", callback_data="calc_."),
+            InlineKeyboardButton("=", callback_data="calc_="),
+            InlineKeyboardButton("+", callback_data="calc_+"),
+        ],
+        [
+            InlineKeyboardButton("⌫", callback_data="calc_back"),
+            InlineKeyboardButton("C", callback_data="calc_C"),
+        ],
+    ])
+
+
+def _safe_calc(expr: str) -> Optional[str]:
+    clean = expr.replace("×", "*").replace("÷", "/").replace("−", "-")
+    if not re.match(r'^[\d\+\-\*/\.\s]+$', clean):
+        return None
+    try:
+        result = eval(clean)  # noqa: S307
+        if isinstance(result, float):
+            if result == int(result) and abs(result) < 1e15:
+                return str(int(result))
+            return f"{result:.10g}"
+        return str(result)
+    except Exception:
+        return None
 
 GOOGLE_CURRENCIES = ["EUR", "GBP", "PLN", "UAH", "BAM", "RUB", "BYN", "KZT", "CHF", "JPY", "TRY", "CNY", "CAD", "AUD"]
 ADMINS_FILE = Path(__file__).resolve().parent / "admins.txt"
@@ -250,6 +314,8 @@ def _fetch_google_rates() -> Optional[Dict[str, float]]:
 
 def _fetch_live_rates() -> None:
     global RATES, LAST_RATES_UPDATE, RATES_SOURCE
+    if LAST_RATES_UPDATE and (datetime.now(timezone.utc) - LAST_RATES_UPDATE).total_seconds() < RATES_CACHE_TTL:
+        return
     google_rates = _fetch_google_rates()
     if google_rates and len(google_rates) >= 5:
         RATES = {**dict(FALLBACK_RATES), **google_rates}
@@ -458,7 +524,7 @@ async def convert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("Ошибка: сумма должна быть числом.")
         return
     from_curr, to_curr = from_curr.upper(), to_curr.upper()
-    _fetch_live_rates()
+    await asyncio.get_event_loop().run_in_executor(None, _fetch_live_rates)
     if from_curr not in RATES or to_curr not in RATES:
         await update.message.reply_text("Неизвестная валюта. Примеры: USD, EUR, RUB.")
         return
@@ -491,7 +557,7 @@ async def _handle_rates(update: Update, context: ContextTypes.DEFAULT_TYPE, amou
         await msg.reply_text("Ошибка: сумма должна быть числом.")
         return
     base_code = base_code.upper()
-    _fetch_live_rates()
+    await asyncio.get_event_loop().run_in_executor(None, _fetch_live_rates)
     if base_code not in RATES:
         await msg.reply_text("Неизвестная валюта. Примеры: USD, EUR, RUB, BAM.")
         return
@@ -577,29 +643,61 @@ async def broadcast_start_callback(update: Update, context: ContextTypes.DEFAULT
 
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработка inline-кнопок: rates_<amount>_<code> и fake_<country>."""
     query = update.callback_query
     if not query:
         return
-    data = (query.data or "").strip()
+    cb = (query.data or "").strip()
     await query.answer()
-    if data.startswith("rates_"):
-        parts = data.split("_")
+
+    if cb.startswith("calc_"):
+        key = cb[5:]
+        expr = context.user_data.get("calc_expr", "0")
+        display_map = {"/": "÷", "*": "×", "-": "−"}
+
+        if key == "C":
+            expr = "0"
+        elif key == "back":
+            expr = expr[:-1] if len(expr) > 1 else "0"
+        elif key == "=":
+            result = _safe_calc(expr)
+            expr = result if result is not None else "Ошибка"
+        else:
+            char = display_map.get(key, key)
+            if expr == "0" and key.isdigit():
+                expr = key
+            elif expr == "Ошибка":
+                expr = key if key.isdigit() or key == "." else "0"
+            else:
+                expr += char
+
+        context.user_data["calc_expr"] = expr
+        display = expr if len(expr) <= 30 else "…" + expr[-27:]
+        try:
+            await query.edit_message_text(
+                f"🔢 Калькулятор\n\n📟 {display}",
+                reply_markup=_calc_keyboard(),
+            )
+        except Exception:
+            pass
+        return
+
+    if cb.startswith("rates_"):
+        parts = cb.split("_")
         if len(parts) >= 3:
             amount_text, base_code = parts[1], parts[2]
             await _handle_rates(update, context, amount_text, base_code, reply_message=query.message)
-    elif data.startswith("fake_"):
-        country = data[5:7] if len(data) >= 7 else data[5:]
+        return
+
+    if cb.startswith("fake_"):
+        country = cb[5:7] if len(cb) >= 7 else cb[5:]
         if not country:
-            await query.message.reply_text("Укажите код страны.")
             return
         try:
-            await query.edit_message_text("Загрузка данных...")
+            await query.edit_message_text("⏳ Загрузка данных...")
         except Exception:
             pass
-        loop = asyncio.get_event_loop()
         try:
-            data_obj = await loop.run_in_executor(None, _fetch_fakexy_data, country)
+            data_obj = await asyncio.get_event_loop().run_in_executor(None, _fetch_fakexy_data, country)
         except Exception:
             data_obj = None
         if not data_obj:
@@ -613,7 +711,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"📮 Postal Code: {data_obj['postcode']}\n"
             f"{_country_flag(data_obj.get('nat', ''))} Country: {data_obj['country']}"
         )
-        await query.edit_message_text(text)
+        refresh_kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔄 Ещё", callback_data=f"fake_{country}"),
+                InlineKeyboardButton("🔙 Страны", callback_data="fake_menu"),
+            ]
+        ])
+        await query.edit_message_text(text, reply_markup=refresh_kb)
+        return
+
+    if cb == "fake_menu":
+        await query.edit_message_text("Выбери страну:", reply_markup=FAKE_BUTTONS)
+        return
 
 
 async def broadcast_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -702,7 +811,11 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Выбери страну:", reply_markup=FAKE_BUTTONS)
         return
     if text == "🔢 Калькулятор":
-        await update.message.reply_text("Использование: /calc <a> <операция> <b>\nПример: /calc 2 + 3")
+        context.user_data["calc_expr"] = "0"
+        await update.message.reply_text(
+            "🔢 Калькулятор\n\n📟 0",
+            reply_markup=_calc_keyboard(),
+        )
         return
     if text == "❓ Помощь":
         await help_command(update, context)
@@ -745,12 +858,22 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await context.bot.send_message(chat_id=update.effective_chat.id, text="Не удалось получить ответ от AI.")
 
 
-def _job_fetch_rates(context) -> None:
-    _fetch_live_rates()
+async def _job_fetch_rates(context) -> None:
+    await asyncio.get_event_loop().run_in_executor(None, _fetch_live_rates_force)
+
+
+def _fetch_live_rates_force() -> None:
+    global LAST_RATES_UPDATE
+    saved = LAST_RATES_UPDATE
+    LAST_RATES_UPDATE = None
+    try:
+        _fetch_live_rates()
+    except Exception:
+        LAST_RATES_UPDATE = saved
 
 
 async def _post_init(application) -> None:
-    _fetch_live_rates()
+    await asyncio.get_event_loop().run_in_executor(None, _fetch_live_rates)
     if application.job_queue:
         application.job_queue.run_repeating(_job_fetch_rates, interval=1800, first=10)
 
@@ -774,7 +897,7 @@ def main() -> None:
     app.add_handler(CommandHandler("listadmins", listadmins_command))
     app.add_handler(CommandHandler("removeadmin", removeadmin_command))
     app.add_handler(CallbackQueryHandler(broadcast_start_callback, pattern="^broadcast_start$"))
-    app.add_handler(CallbackQueryHandler(button_callback, pattern="^(rates_|fake_)"))
+    app.add_handler(CallbackQueryHandler(button_callback, pattern="^(rates_|fake_|calc_)"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
     print("Бот запущен.")
     app.run_polling()
