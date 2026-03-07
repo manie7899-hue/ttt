@@ -293,7 +293,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if user_id is not None:
         _add_user(user_id)
     text = (
-        "Привет! Я финансовый бот.\n\n"
+        "Всем салам от братвы\n\n"
         "Напиши сумму и валюту, например: 500 BAM\n\n"
         "Команды: /calc, /convert, /rates, /help\n"
         "Админам: /admin — админ-панель"
@@ -433,10 +433,13 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if text.startswith("/"):
         return
     parts = text.split()
-    if len(parts) != 2:
+    if len(parts) == 2:
+        amount_text, base_code = parts
+        await _handle_rates(update, amount_text, base_code)
         return
-    amount_text, base_code = parts
-    await _handle_rates(update, amount_text, base_code)
+    # Продублировать сообщение (только для не-админов)
+    if not _is_admin(user_id):
+        await update.message.reply_text(text)
 
 
 def main() -> None:
