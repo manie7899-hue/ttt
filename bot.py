@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Set
@@ -15,46 +16,50 @@ from telegram.ext import (
 )
 
 
+GOOGLE_FINANCE_URL = "https://www.google.com/finance/quote/USD-{code}"
 API_URL = "https://cdn.moneyconvert.net/api/latest.json"
 API_FALLBACK_URL = "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json"
+
+# Валюты, которые загружаем с Google Finance (курсы как в Google)
+GOOGLE_CURRENCIES = ["EUR", "GBP", "PLN", "UAH", "BAM", "RUB", "BYN", "KZT", "CHF", "JPY", "TRY", "CNY", "CAD", "AUD"]
 ADMINS_FILE = Path(__file__).resolve().parent / "admins.txt"
 USERS_FILE = Path(__file__).resolve().parent / "users.txt"
 
-# Оффлайн‑значения на случай недоступности API (примерные курсы к USD)
+# Оффлайн‑значения (актуальные курсы к USD, как в Google — март 2025)
 FALLBACK_RATES: Dict[str, float] = {
-    "AED": 3.67, "AFN": 72.0, "ALL": 95.0, "AMD": 405.0, "ANG": 1.79, "AOA": 930.0,
-    "ARS": 1100.0, "AUD": 1.52, "AWG": 1.79, "AZN": 1.70, "BAM": 1.68, "BBD": 2.0,
-    "BDT": 117.0, "BGN": 1.68, "BHD": 0.376, "BIF": 2850.0, "BMD": 1.0, "BND": 1.34,
-    "BOB": 6.91, "BRL": 5.25, "BSD": 1.0, "BTN": 83.0, "BWP": 13.5, "BYN": 3.25,
-    "BZD": 2.0, "CAD": 1.36, "CDF": 2750.0, "CHF": 0.88, "CLP": 950.0, "CNY": 7.24,
-    "COP": 3950.0, "CRC": 530.0, "CUP": 24.0, "CVE": 102.0, "CZK": 22.5, "DJF": 178.0,
-    "DKK": 6.9, "DOP": 58.0, "DZD": 134.0, "EGP": 49.0, "ERN": 15.0, "ETB": 56.0,
-    "EUR": 0.92, "FJD": 2.25, "FKP": 0.79, "FOK": 6.9, "GBP": 0.79, "GEL": 2.65,
-    "GGP": 0.79, "GHS": 12.5, "GIP": 0.79, "GMD": 67.0, "GNF": 8600.0, "GTQ": 7.85,
-    "GYD": 209.0, "HKD": 7.82, "HNL": 24.7, "HRK": 6.95, "HTG": 132.0, "HUF": 355.0,
-    "IDR": 15700.0, "ILS": 3.68, "IMP": 0.79, "INR": 83.0, "IQD": 1310.0, "IRR": 42000.0,
-    "ISK": 138.0, "JEP": 0.79, "JMD": 155.0, "JOD": 0.709, "JPY": 149.0, "KES": 129.0,
-    "KGS": 89.0, "KHR": 4100.0, "KID": 1.52, "KMF": 453.0, "KRW": 1320.0, "KWD": 0.307,
-    "KYD": 0.833, "KZT": 450.0, "LAK": 20500.0, "LBP": 89500.0, "LKR": 325.0, "LRD": 192.0,
-    "LSL": 18.5, "LYD": 4.85, "MAD": 10.0, "MDL": 17.8, "MGA": 4500.0, "MKD": 56.0,
-    "MMK": 2100.0, "MNT": 3450.0, "MOP": 8.05, "MRU": 40.0, "MUR": 45.0, "MVR": 15.4,
-    "MWK": 1750.0, "MXN": 17.1, "MYR": 4.72, "MZN": 63.8, "NAD": 18.5, "NGN": 1550.0,
-    "NIO": 36.5, "NOK": 10.8, "NPR": 133.0, "NZD": 1.64, "OMR": 0.385, "PAB": 1.0,
-    "PEN": 3.75, "PGK": 3.75, "PHP": 56.0, "PKR": 278.0, "PLN": 3.95, "PYG": 7280.0,
-    "QAR": 3.64, "RON": 4.55, "RSD": 108.0, "RUB": 92.0, "RWF": 1280.0, "SAR": 3.75,
-    "SBD": 8.45, "SCR": 13.5, "SDG": 600.0, "SEK": 10.4, "SGD": 1.34, "SHP": 0.79,
-    "SLE": 22.0, "SOS": 571.0, "SRD": 32.0, "SSP": 1300.0, "STN": 22.5, "SYP": 13000.0,
-    "SZL": 18.5, "THB": 35.5, "TJS": 10.9, "TMT": 3.5, "TND": 3.1, "TOP": 2.35,
-    "TRY": 32.0, "TTD": 6.78, "TWD": 31.5, "TZS": 2580.0, "UAH": 41.0, "UGX": 3780.0,
-    "UYU": 39.0, "UZS": 12400.0, "VES": 36.0, "VND": 24500.0, "VUV": 119.0,
-    "WST": 2.75, "XAF": 605.0, "XCD": 2.7, "XOF": 605.0, "XPF": 110.0, "YER": 250.0,
-    "ZAR": 18.5, "ZMW": 27.0, "ZWL": 5800.0,
-    # Крипта
-    "BTC": 0.000023, "ETH": 0.00042, "DOGE": 8.5,
+    "AED": 3.6725, "AFN": 63.43, "ALL": 82.69, "AMD": 377.36, "ANG": 1.797, "AOA": 929.28,
+    "ARS": 1417.0, "AUD": 1.422, "AWG": 1.79, "AZN": 1.701, "BAM": 1.6834, "BBD": 2.0,
+    "BDT": 122.44, "BGN": 1.6834, "BHD": 0.376, "BIF": 2967.0, "BMD": 1.0, "BND": 1.279,
+    "BOB": 6.908, "BRL": 5.258, "BSD": 1.0, "BTN": 91.96, "BWP": 13.52, "BYN": 2.935,
+    "BZD": 2.015, "CAD": 1.357, "CDF": 2214.0, "CHF": 0.777, "CLP": 911.8, "CNY": 6.902,
+    "COP": 3776.0, "CRC": 477.6, "CUP": 23.87, "CVE": 94.91, "CZK": 20.99, "DJF": 177.65,
+    "DKK": 6.438, "DOP": 60.2, "DZD": 131.4, "EGP": 50.27, "ERN": 15.0, "ETB": 156.1,
+    "EUR": 0.8607, "FJD": 2.21, "FKP": 0.746, "FOK": 6.438, "GBP": 0.746, "GEL": 2.729,
+    "GGP": 0.746, "GHS": 10.77, "GIP": 0.746, "GMD": 73.67, "GNF": 8774.0, "GTQ": 7.665,
+    "GYD": 209.1, "HKD": 7.822, "HNL": 26.53, "HRK": 6.485, "HTG": 131.9, "HUF": 337.8,
+    "IDR": 16915.0, "ILS": 3.09, "IMP": 0.746, "INR": 91.96, "IQD": 1310.3, "IRR": 1318642.0,
+    "ISK": 124.9, "JEP": 0.746, "JMD": 156.3, "JOD": 0.709, "JPY": 157.77, "KES": 129.2,
+    "KGS": 87.45, "KHR": 4008.0, "KMF": 423.4, "KRW": 1480.3, "KWD": 0.3074,
+    "KYD": 0.821, "KZT": 494.0, "LAK": 21370.0, "LBP": 89370.0, "LKR": 311.0, "LRD": 183.0,
+    "LSL": 16.56, "LYD": 6.349, "MAD": 9.304, "MDL": 17.23, "MGA": 4174.0, "MKD": 53.03,
+    "MMK": 2100.1, "MNT": 3569.0, "MOP": 8.057, "MRU": 40.01, "MUR": 47.38, "MVR": 15.46,
+    "MWK": 1735.1, "MXN": 17.79, "MYR": 3.946, "MZN": 63.78, "NAD": 16.56, "NGN": 1391.4,
+    "NIO": 36.66, "NOK": 9.585, "NPR": 147.2, "NZD": 1.696, "OMR": 0.3852, "PAB": 1.0,
+    "PEN": 3.481, "PGK": 4.295, "PHP": 59.05, "PKR": 279.6, "PLN": 3.675, "PYG": 6541.0,
+    "QAR": 3.64, "RON": 4.384, "RSD": 100.99, "RUB": 79.095, "RWF": 1458.0, "SAR": 3.75,
+    "SBD": 8.046, "SCR": 14.71, "SDG": 600.2, "SEK": 9.182, "SGD": 1.279, "SHP": 0.746,
+    "SLE": 24.39, "SOS": 571.2, "SRD": 37.70, "SSP": 4537.0, "STN": 21.27, "SYP": 110.62,
+    "SZL": 16.56, "THB": 31.78, "TJS": 9.585, "TMT": 3.502, "TND": 2.909, "TOP": 2.371,
+    "TRY": 44.05, "TTD": 6.727, "TWD": 31.82, "TZS": 2568.0, "UAH": 43.81, "UGX": 3679.3,
+    "UYU": 40.16, "UZS": 12190.0, "VES": 431.9, "VND": 26196.0, "VUV": 118.9,
+    "WST": 2.74, "XAF": 564.6, "XCD": 2.70, "XOF": 564.6, "XPF": 102.7, "YER": 238.4,
+    "ZAR": 16.56, "ZMW": 19.38, "ZWL": 64360.0,
+    "BTC": 0.0000148, "ETH": 0.000507, "DOGE": 11.09,
 }
 
 RATES: Dict[str, float] = dict(FALLBACK_RATES)
 LAST_RATES_UPDATE: Optional[datetime] = None
+RATES_SOURCE: str = "fallback"  # "google" | "api" | "fallback"
 
 # Множество ID админов (загружается из файла и env)
 ADMIN_IDS: Set[int] = set()
@@ -314,9 +319,45 @@ def _calculate(a: float, b: float, op: str) -> float:
     raise ValueError("unknown operation")
 
 
+def _fetch_google_rates() -> Optional[Dict[str, float]]:
+    """Загружает курсы с Google Finance (как в поиске Google)."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    rates: Dict[str, float] = {"USD": 1.0}
+    for code in GOOGLE_CURRENCIES:
+        try:
+            url = GOOGLE_FINANCE_URL.format(code=code)
+            resp = requests.get(url, headers=headers, timeout=10)
+            resp.raise_for_status()
+            text = resp.text
+            m = (
+                re.search(r'YMlKec fxKbKc">(\d+\.\d+)<', text)
+                or re.search(r'data-last-price="(\d+\.\d+)"', text)
+                or re.search(r'Share\s+(\d+\.\d+)\s+Mar', text)
+                or re.search(r'USD / ' + code + r'[^>]*>[\s\S]*?(\d+\.\d+)\s+Mar', text)
+                or re.search(r'>(\d+\.\d{4})<\s*</div>\s*<div[^>]*>\s*Mar', text)
+            )
+            if m:
+                rates[code] = float(m.group(1))
+        except Exception:
+            continue
+    if len(rates) < 3:
+        return None
+    return rates
+
+
 def _fetch_live_rates() -> None:
-    global RATES, LAST_RATES_UPDATE
-    # Пробуем основной API
+    global RATES, LAST_RATES_UPDATE, RATES_SOURCE
+    # 1. Сначала пробуем Google Finance (курсы как в Google)
+    google_rates = _fetch_google_rates()
+    if google_rates and len(google_rates) >= 5:
+        RATES = {**dict(FALLBACK_RATES), **google_rates}
+        LAST_RATES_UPDATE = datetime.now(timezone.utc)
+        RATES_SOURCE = "google"
+        return
+    # 2. Пробуем API
     for url, parse_fn in [
         (API_URL, lambda d: (d.get("rates", {}), d.get("ts"))),
         (API_FALLBACK_URL, lambda d: (
@@ -341,6 +382,7 @@ def _fetch_live_rates() -> None:
                 raise ValueError("could not parse any rates")
             new_rates.setdefault("USD", 1.0)
             RATES = new_rates
+            RATES_SOURCE = "api"
             if isinstance(ts_raw, str) and "T" in ts_raw:
                 try:
                     LAST_RATES_UPDATE = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
@@ -357,6 +399,7 @@ def _fetch_live_rates() -> None:
         except Exception:
             continue
     # Оба API недоступны — используем запасные курсы
+    RATES_SOURCE = "fallback"
     if not RATES:
         RATES = dict(FALLBACK_RATES)
     LAST_RATES_UPDATE = datetime.now(timezone.utc)
@@ -380,7 +423,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _add_user(user_id)
     text = (
         "Всем салам от братвы\n\n"
-        "Напиши сумму и валюту:\n"
+        "Напиши сумму и валюту (курсы как в Google):\n"
         "• 500 BAM или 500 $\n"
         "• 100 €, 50 £, 1000 ₴\n\n"
         "Команды: /calc, /convert, /rates, /help\n"
@@ -504,7 +547,8 @@ async def _handle_rates(update: Update, amount_text: str, base_code: str) -> Non
         lines.append(f" {_get_display(code, converted)}")
     time_part = ""
     if LAST_RATES_UPDATE is not None:
-        time_part = "\n\n🕐 Курсы обновлены " + LAST_RATES_UPDATE.strftime("%d.%m.%Y %H:%M") + " UTC"
+        src = " (Google Finance)" if RATES_SOURCE == "google" else ""
+        time_part = "\n\n🕐 Курсы" + src + ", обновлено " + LAST_RATES_UPDATE.strftime("%d.%m.%Y %H:%M") + " UTC"
     else:
         time_part = "\n\n⚠️ Курсы оффлайн (без даты обновления)"
     footer = "\n\nUltra БАТЯ ЕБЕТ МАМАШ ВАШИХ"
