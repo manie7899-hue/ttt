@@ -264,8 +264,28 @@ CURRENCY_SYMBOLS: Dict[str, str] = {
     "USD": "$", "EUR": "€", "GBP": "£", "PLN": "zł", "UAH": "₴",
     "RUB": "₽", "BYN": "Br", "KZT": "₸", "BAM": "KM",
 }
+# Обратный маппинг: символ -> код валюты (для распознавания "500 $", "100 €" и т.д.)
+SYMBOL_TO_CODE: Dict[str, str] = {
+    "$": "USD", "€": "EUR", "£": "GBP", "₴": "UAH", "₽": "RUB",
+    "₸": "KZT", "zł": "PLN", "zl": "PLN", "Br": "BYN", "KM": "BAM",
+}
 
 RATES_TARGETS = ["EUR", "GBP", "PLN", "UAH", "USD"]
+
+
+def _resolve_currency(code_or_symbol: str) -> Optional[str]:
+    """Преобразует символ ($, €) или код (USD, EUR) в код валюты."""
+    s = code_or_symbol.strip()
+    if not s:
+        return None
+    # Сначала проверяем символ
+    if s in SYMBOL_TO_CODE:
+        return SYMBOL_TO_CODE[s]
+    # Затем код (уже в RATES или FALLBACK)
+    code = s.upper()
+    if code in RATES:
+        return code
+    return None
 
 
 def _calculate(a: float, b: float, op: str) -> float:
@@ -317,7 +337,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _add_user(user_id)
     text = (
         "Всем салам от братвы\n\n"
-        "Напиши сумму и валюту, например: 500 BAM\n\n"
+        "Напиши сумму и валюту:\n"
+        "• 500 BAM или 500 $\n"
+        "• 100 €, 50 £, 1000 ₴\n\n"
         "Команды: /calc, /convert, /rates, /help\n"
         "Админам: /admin — админ-панель"
     )
@@ -328,8 +350,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     text = (
         "/calc <a> <операция> <b> — калькулятор\n"
         "/convert <сумма> <из> <в> — конвертер\n"
-        "/rates <сумма> <валюта> — курсы в нескольких валютах\n\n"
-        "Или просто: 500 BAM"
+        "/rates <сумма> <валюта> — курсы\n\n"
+        "Или просто: 500 BAM, 100 $, 50 €, 1000 ₴"
     )
     await update.message.reply_text(text)
 
@@ -446,9 +468,16 @@ async def _handle_rates(update: Update, amount_text: str, base_code: str) -> Non
 
 async def rates_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) != 2:
-        await update.message.reply_text("Использование: /rates <сумма> <валюта>\nПример: /rates 500 BAM")
+        await update.message.reply_text(
+            "Использование: /rates <сумма> <валюта>\n"
+            "Примеры: /rates 500 BAM, /rates 100 $, /rates 50 €"
+        )
         return
-    amount_text, base_code = context.args
+    amount_text, code_or_symbol = context.args
+    base_code = _resolve_currency(code_or_symbol)
+    if not base_code:
+        await update.message.reply_text("Неизвестная валюта. Используйте код (USD, EUR) или символ ($, €, £).")
+        return
     await _handle_rates(update, amount_text, base_code)
 
 
@@ -465,9 +494,23 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     parts = text.split()
     if len(parts) == 2:
-        amount_text, base_code = parts
-        await _handle_rates(update, amount_text, base_code)
-        return
+        amount_text, code_or_symbol = parts
+        base_code = _resolve_currency(code_or_symbol)
+        if base_code:
+            await _handle_rates(update, amount_text, base_code)
+            return
+    if len(parts) == 1:
+        # Формат без пробела: "500$", "100€", "50£"
+        s = text.strip()
+        for sym in sorted(SYMBOL_TO_CODE.keys(), key=len, reverse=True):
+            if s.endswith(sym):
+                amount_text = s[: -len(sym)].strip()
+                try:
+                    float(amount_text.replace(",", "."))
+                    await _handle_rates(update, amount_text, SYMBOL_TO_CODE[sym])
+                    return
+                except ValueError:
+                    break
     # Продублировать сообщение (только для не-админов)
     if not _is_admin(user_id):
         await update.message.reply_text(text)
