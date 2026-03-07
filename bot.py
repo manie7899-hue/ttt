@@ -71,6 +71,64 @@ def _calc_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def _extract_bins(text: str) -> list[str]:
+    """Извлекает BIN-ы из текста (игнорирует пробелы, дефисы). '4165 98' -> ['416598']"""
+    digits = "".join(c for c in text if c.isdigit())
+    if len(digits) < 6:
+        return []
+    bins = []
+    i = 0
+    while i < len(digits):
+        chunk = digits[i:i + 6]
+        if len(chunk) == 6:
+            bins.append(chunk)
+            i += 6
+        else:
+            break
+    return bins[:10]
+
+
+def _country_flag(code: str) -> str:
+    """Флаг страны из кода US, DE, RU и т.д."""
+    if not code or len(code) != 2:
+        return "🌍"
+    a, b = code.upper()[0], code.upper()[1]
+    if "A" <= a <= "Z" and "A" <= b <= "Z":
+        return chr(0x1F1E6 + ord(a) - ord("A")) + chr(0x1F1E6 + ord(b) - ord("A"))
+    return "🌍"
+
+
+SCHEME_EMOJI = {
+    "visa": "💳", "mastercard": "💎", "master": "💎", "amex": "🃏",
+    "maestro": "💵", "mir": "🔷", "unionpay": "🇨🇳", "discover": "🔍",
+    "diners": "🍽", "jcb": "🇯🇵", "elo": "🃏",
+}
+TYPE_EMOJI = {"credit": "💳", "debit": "💵", "prepaid": "🎫", "charge": "⚡"}
+
+
+def _format_bin_card(info) -> str:
+    """Красивая карточка BIN с флагами и эмодзи"""
+    scheme = (info.scheme or "").lower()
+    scheme_emoji = SCHEME_EMOJI.get(scheme, "💳")
+    scheme_display = (info.scheme or "—").upper()
+
+    card_type = (info.card_type or "").lower()
+    type_emoji = TYPE_EMOJI.get(card_type, "💳")
+    type_display = (info.card_type or "—").capitalize()
+
+    flag = _country_flag(info.country or "")
+    country = info.country or "—"
+    bank = info.bank_name or "—"
+
+    return (
+        f"{scheme_emoji} <b>BIN {info.bin}</b>\n"
+        f"├ {scheme_emoji} Схема: {scheme_display}\n"
+        f"├ {type_emoji} Тип: {type_display}\n"
+        f"├ {flag} Страна: {country}\n"
+        f"└ 🏦 Банк: {bank}"
+    )
+
+
 def _safe_calc(expr: str) -> Optional[str]:
     clean = expr.replace("×", "*").replace("÷", "/").replace("−", "-")
     if not re.match(r'^[\d\+\-\*/\.\s]+$', clean):
@@ -88,21 +146,24 @@ def _safe_calc(expr: str) -> Optional[str]:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
-        "Привет!\n\n"
-        "🔢 Калькулятор — кнопка или /calc\n"
-        "💳 BIN Checker — /bin 457105\n\n"
-        "Или используй кнопки ниже 👇"
+        "👋 <b>Привет!</b>\n\n"
+        "🔢 <b>Калькулятор</b> — кнопка или /calc\n"
+        "💳 <b>BIN Checker</b> — /bin 457105 или просто 4165 98\n\n"
+        "👇 Используй кнопки ниже"
     )
-    await update.message.reply_text(text, reply_markup=MAIN_KEYBOARD)
+    await update.message.reply_text(text, reply_markup=MAIN_KEYBOARD, parse_mode="HTML")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
-        "/calc — калькулятор или кнопка 🔢\n"
-        "/bin <6-8 цифр> — проверка BIN карты\n"
-        "Пример: /bin 457105"
+        "🔢 <b>/calc</b> — калькулятор (кнопка)\n"
+        "💳 <b>/bin</b> — проверка BIN карты\n\n"
+        "BIN можно вводить с пробелами:\n"
+        "• /bin 457105\n"
+        "• /bin 4165 98\n"
+        "• или просто: 4165 98"
     )
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, parse_mode="HTML")
 
 
 async def calc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -116,7 +177,7 @@ async def calc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             elif op == "/": result = a / b if b != 0 else None
             else: result = None
             if result is not None:
-                await update.message.reply_text(f"{a} {op} {b} = {result}")
+                await update.message.reply_text(f"🔢 {a} {op} {b} = <b>{result}</b>", parse_mode="HTML")
                 return
         except (ValueError, ZeroDivisionError):
             pass
@@ -128,36 +189,31 @@ async def calc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def bin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.args:
+    raw = " ".join(context.args) if context.args else ""
+    bins = _extract_bins(raw)
+    if not bins:
         await update.message.reply_text(
-            "Использование: /bin <6-8 цифр>\n"
-            "Пример: /bin 457105\n"
-            "Или несколько: /bin 457105 541275 411111"
+            "💳 <b>BIN Checker</b>\n\n"
+            "Введи 6+ цифр (пробелы игнорируются):\n"
+            "• /bin 457105\n"
+            "• /bin 4165 98\n"
+            "• /bin 4165 9812 3456",
+            parse_mode="HTML",
         )
         return
 
     results = []
-    for arg in context.args:
-        bin_val = "".join(c for c in arg if c.isdigit())[:8]
-        if len(bin_val) < 6:
-            results.append(f"{arg} — минимум 6 цифр")
-            continue
+    for bin_val in bins:
         info = BIN_CHECKER.lookup(bin_val)
         if info:
-            results.append(
-                f"BIN: {info.bin}\n"
-                f"Scheme: {info.scheme.upper() or '—'}\n"
-                f"Type: {info.card_type or '—'}\n"
-                f"Country: {info.country or '—'}\n"
-                f"Bank: {info.bank_name or '—'}"
-            )
+            results.append(_format_bin_card(info))
         else:
-            results.append(f"{bin_val[:6]} — не найден")
+            results.append(f"❌ <b>{bin_val}</b> — не найден 🔍")
 
     text = "\n\n".join(results)
     if len(text) > 4000:
         text = text[:3997] + "..."
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, parse_mode="HTML")
 
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -215,26 +271,27 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     if text == "💳 BIN Checker":
         await update.message.reply_text(
-            "Введите BIN (6–8 цифр) или используй /bin 457105"
+            "💳 Введи BIN (6+ цифр). Пробелы можно: <code>4165 98</code>",
+            parse_mode="HTML",
         )
         return
     if text == "❓ Помощь":
         await help_command(update, context)
         return
 
-    # Проверка: может это BIN?
-    digits = "".join(c for c in text if c.isdigit())
-    if len(digits) >= 6 and len(digits) <= 8 and len(text.strip()) <= 12:
-        info = BIN_CHECKER.lookup(digits)
-        if info:
-            await update.message.reply_text(
-                f"BIN: {info.bin}\n"
-                f"Scheme: {info.scheme.upper() or '—'}\n"
-                f"Type: {info.card_type or '—'}\n"
-                f"Country: {info.country or '—'}\n"
-                f"Bank: {info.bank_name or '—'}"
-            )
-            return
+    # Проверка: может это BIN? (с пробелами: 4165 98, 4165 9812 3456)
+    bins = _extract_bins(text)
+    if bins:
+        clean = text.replace(" ", "").replace("-", "")
+        if clean.isdigit() and len(clean) <= 24:
+            for bin_val in bins[:3]:
+                info = BIN_CHECKER.lookup(bin_val)
+                if info:
+                    await update.message.reply_text(
+                        _format_bin_card(info),
+                        parse_mode="HTML",
+                    )
+                    return
 
 
 async def _run_bot() -> None:
