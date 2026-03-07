@@ -1,7 +1,9 @@
 import asyncio
+import logging
 import os
 import random
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
@@ -16,6 +18,12 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+
+logging.basicConfig(
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger("bot")
 
 
 GOOGLE_FINANCE_URL = "https://www.google.com/finance/quote/USD-{code}"
@@ -524,7 +532,7 @@ async def convert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("Ошибка: сумма должна быть числом.")
         return
     from_curr, to_curr = from_curr.upper(), to_curr.upper()
-    await asyncio.get_event_loop().run_in_executor(None, _fetch_live_rates)
+    await asyncio.get_running_loop().run_in_executor(None, _fetch_live_rates)
     if from_curr not in RATES or to_curr not in RATES:
         await update.message.reply_text("Неизвестная валюта. Примеры: USD, EUR, RUB.")
         return
@@ -557,7 +565,7 @@ async def _handle_rates(update: Update, context: ContextTypes.DEFAULT_TYPE, amou
         await msg.reply_text("Ошибка: сумма должна быть числом.")
         return
     base_code = base_code.upper()
-    await asyncio.get_event_loop().run_in_executor(None, _fetch_live_rates)
+    await asyncio.get_running_loop().run_in_executor(None, _fetch_live_rates)
     if base_code not in RATES:
         await msg.reply_text("Неизвестная валюта. Примеры: USD, EUR, RUB, BAM.")
         return
@@ -605,7 +613,7 @@ async def fake_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Укажите код страны (2 буквы): DE, US, UK.")
         return
     msg = await update.message.reply_text("Загрузка данных...")
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         data = await loop.run_in_executor(None, _fetch_fakexy_data, country)
     except Exception:
@@ -697,7 +705,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         except Exception:
             pass
         try:
-            data_obj = await asyncio.get_event_loop().run_in_executor(None, _fetch_fakexy_data, country)
+            data_obj = await asyncio.get_running_loop().run_in_executor(None, _fetch_fakexy_data, country)
         except Exception:
             data_obj = None
         if not data_obj:
@@ -851,7 +859,7 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 except ValueError:
                     break
     # Сообщение не о валюте — отправляем в Gemini
-    reply = await asyncio.get_event_loop().run_in_executor(None, _ask_gemini, text)
+    reply = await asyncio.get_running_loop().run_in_executor(None, _ask_gemini, text)
     if reply:
         await context.bot.send_message(chat_id=update.effective_chat.id, text=reply[:4000])
     elif os.getenv("GEMINI_API_KEY", "").strip():
@@ -859,7 +867,10 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def _job_fetch_rates(context) -> None:
-    await asyncio.get_event_loop().run_in_executor(None, _fetch_live_rates_force)
+    try:
+        await asyncio.get_running_loop().run_in_executor(None, _fetch_live_rates_force)
+    except Exception as exc:
+        logger.warning("Background rate fetch failed: %s", exc)
 
 
 def _fetch_live_rates_force() -> None:
@@ -874,21 +885,30 @@ def _fetch_live_rates_force() -> None:
 
 async def _post_init(application) -> None:
     try:
-        await asyncio.get_event_loop().run_in_executor(None, _fetch_live_rates)
+        await asyncio.get_running_loop().run_in_executor(None, _fetch_live_rates)
+        logger.info("Курсы загружены (%s)", RATES_SOURCE)
     except Exception as exc:
-        print(f"[warning] Не удалось загрузить курсы при старте: {exc}")
+        logger.warning("Не удалось загрузить курсы при старте: %s", exc)
     if application.job_queue:
-        application.job_queue.run_repeating(_job_fetch_rates, interval=1800, first=10)
+        application.job_queue.run_repeating(_job_fetch_rates, interval=1800, first=30)
+
+
+async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error("Exception while handling update: %s", context.error, exc_info=context.error)
 
 
 def main() -> None:
-    import time
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError("Задайте TELEGRAM_BOT_TOKEN.")
+    logger.info("Загрузка данных...")
     _load_admins()
     _load_users()
-    time.sleep(2)
+    logger.info("Ожидание завершения старого экземпляра...")
+    time.sleep(5)
+    logger.info("Запуск бота...")
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     app = ApplicationBuilder().token(token).post_init(_post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
@@ -904,14 +924,14 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(broadcast_start_callback, pattern="^broadcast_start$"))
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^(rates_|fake_|calc_)"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
-    print("Бот запущен.")
-    app.run_polling(drop_pending_updates=True)
+    app.add_error_handler(_error_handler)
+    logger.info("Бот запущен, начинаю polling.")
+    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        import sys
-        print(f"Ошибка запуска: {e}", file=sys.stderr)
+        logger.critical("FATAL: %s", e, exc_info=True)
         raise
