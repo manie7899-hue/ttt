@@ -71,25 +71,12 @@ def _calc_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def _extract_bins(text: str) -> list[str]:
-    """Извлекает BIN-ы из текста. Пробелы/дефисы игнорируются. 4339 62 -> 433962. 4339 6200 0065 0407 -> 433962, 000650, 040700"""
+def _extract_bin(text: str) -> str | None:
+    """Берёт только первые 6 цифр. Пробелы игнорируются. 4432 6440 1636 7695 -> 443264"""
     digits = "".join(c for c in text if c.isdigit())
-    if len(digits) < 4:
-        return []
-    bins = []
-    i = 0
-    while i < len(digits):
-        rest = len(digits) - i
-        if rest >= 6:
-            bins.append(digits[i:i + 6])
-            i += 6
-        elif rest >= 4:
-            chunk = digits[i:].ljust(6, "0")
-            bins.append(chunk)
-            break
-        else:
-            break
-    return bins[:10]
+    if len(digits) < 6:
+        return None
+    return digits[:6]
 
 
 def _country_flag(code: str) -> str:
@@ -194,30 +181,22 @@ async def calc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def bin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     raw = " ".join(context.args) if context.args else ""
-    bins = _extract_bins(raw)
-    if not bins:
+    bin_val = _extract_bin(raw)
+    if not bin_val:
         await update.message.reply_text(
             "💳 <b>BIN Checker</b>\n\n"
-            "Введи 6+ цифр (пробелы не важны):\n"
+            "Введи минимум 6 цифр (пробелы игнорируются):\n"
             "• /bin 457105\n"
-            "• /bin 4165 98\n"
-            "• /bin 4339 6200 0065 0407",
+            "• /bin 4432 64",
             parse_mode="HTML",
         )
         return
 
-    results = []
-    for bin_val in bins:
-        info = BIN_CHECKER.lookup(bin_val)
-        if info:
-            results.append(_format_bin_card(info))
-        else:
-            results.append(f"❌ <b>{bin_val}</b> — не найден 🔍")
-
-    text = "\n\n".join(results)
-    if len(text) > 4000:
-        text = text[:3997] + "..."
-    await update.message.reply_text(text, parse_mode="HTML")
+    info = BIN_CHECKER.lookup(bin_val)
+    if info:
+        await update.message.reply_text(_format_bin_card(info), parse_mode="HTML")
+    else:
+        await update.message.reply_text(f"❌ <b>{bin_val}</b> — не найден 🔍", parse_mode="HTML")
 
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -283,19 +262,17 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await help_command(update, context)
         return
 
-    # Проверка: может это BIN? (с пробелами: 4165 98, 4165 9812 3456)
-    bins = _extract_bins(text)
-    if bins:
+    # Проверка: может это BIN? (первые 6 цифр)
+    bin_val = _extract_bin(text)
+    if bin_val:
         clean = text.replace(" ", "").replace("-", "")
         if clean.isdigit() and len(clean) <= 24:
-            for bin_val in bins[:3]:
-                info = BIN_CHECKER.lookup(bin_val)
-                if info:
-                    await update.message.reply_text(
-                        _format_bin_card(info),
-                        parse_mode="HTML",
-                    )
-                    return
+            info = BIN_CHECKER.lookup(bin_val)
+            if info:
+                await update.message.reply_text(
+                    _format_bin_card(info),
+                    parse_mode="HTML",
+                )
 
 
 async def _run_bot() -> None:
